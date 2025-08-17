@@ -13,6 +13,7 @@ class OcrResult {
   final String? givenName;
   final String? birthdate;
   final String? expiryDate;
+  final String? rhfactor;
 
   OcrResult({
     this.nin,
@@ -21,6 +22,7 @@ class OcrResult {
     this.givenName,
     this.birthdate,
     this.expiryDate,
+    this.rhfactor,
   });
 
   Map<String, dynamic> toJson() => {
@@ -30,6 +32,7 @@ class OcrResult {
     'givenName': givenName,
     'birthdate': birthdate,
     'expiryDate': expiryDate,
+    'RhFactor': rhfactor,
   };
 
   factory OcrResult.fromJson(Map<String, dynamic> json) => OcrResult(
@@ -39,6 +42,7 @@ class OcrResult {
     givenName: json['givenName'],
     birthdate: json['birthdate'],
     expiryDate: json['expiryDate'],
+    rhfactor: json['RhFactor'],
   );
 }
 
@@ -54,27 +58,53 @@ class OcrPlugin {
     final inputImage = InputImage.fromFile(imageFile);
     final textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
     final recognizedText = await textRecognizer.processImage(inputImage);
+    print("=========== 🆕 OCR Extracted Text ===========");
+
+    for (TextBlock block in recognizedText.blocks) {
+      print("Block: ${block.text}");
+
+      for (TextLine line in block.lines) {
+        print("  Line: ${line.text}");
+
+        for (TextElement element in line.elements) {
+          print("    Element: ${element.text}");
+        }
+      }
+    }
+
+    print("============================================");
     await textRecognizer.close();
 
     String? nin, cardNumber;
     final rawText = recognizedText.text;
 
     // Regex patterns for card data
-    final ninRegex = RegExp(r'\b\d{18}\b');
-    final cardRegex = RegExp(r'^(?!\d{9}$)[A-Z0-9]{9}$');
 
     final familyName = OcrParser.extractFamilyName(rawText);
     final givenName = OcrParser.extractGivenName(rawText);
     final birthdate = OcrParser.extractBirthdate(rawText);
     final expiryDate = OcrParser.extractEndDate(rawText);
+    final RhFactor = OcrParser.extractRhFactor(rawText);
 
     for (final block in recognizedText.blocks) {
       for (final line in block.lines) {
-        final text = line.text;
+        // Normalize OCR output
+        String text = line.text
+            .replaceAll(RegExp(r'\s+'), '') // remove spaces/newlines
+            .replaceAll('O', '0') // OCR O → 0
+            .replaceAll('I', '1') // OCR I → 1
+            .replaceAll('l', '1'); // OCR lowercase L → 1
 
-        if (ninRegex.hasMatch(text)) {
+        // --- NIN: 18 consecutive digits ---
+        final ninRegex = RegExp(r'\d{18}');
+        if (nin == null && ninRegex.hasMatch(text)) {
           nin = ninRegex.firstMatch(text)!.group(0);
-        } else if (cardRegex.hasMatch(text)) {
+        }
+
+        // --- Card Number: 9 alphanumeric, must have letters + digits ---
+        final cardRegex = RegExp(r'(?:\d{9}|[A-Z0-9]{9,}(?=.*\d))');
+
+        if (cardNumber == null && cardRegex.hasMatch(text)) {
           cardNumber = cardRegex.firstMatch(text)!.group(0);
         }
       }
@@ -87,6 +117,7 @@ class OcrPlugin {
       givenName: givenName,
       birthdate: birthdate,
       expiryDate: expiryDate,
+      rhfactor: RhFactor,
     );
   }
 }
@@ -153,6 +184,17 @@ class OcrParser {
       }
     }
     return null;
+  }
+
+  static String? extractRhFactor(String text) {
+    final validGroups = ["O+", "O-", "A+", "A-", "AB+", "AB-"];
+
+    for (final group in validGroups) {
+      if (text.contains(group)) {
+        return group;
+      }
+    }
+    return null; // nothing found
   }
 
   static String? extractEndDate(String text) {

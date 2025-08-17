@@ -74,6 +74,7 @@ class _OcrHomePageState extends State<OcrHomePage> {
                     Text("Given Name: ${_result!.givenName ?? '-'}"),
                     Text("Birthdate: ${_result!.birthdate ?? '-'}"),
                     Text("Expiry Date: ${_result!.expiryDate ?? '-'}"),
+                    Text("Rh: ${_result!.rhfactor ?? '-'}"),
                   ],
                 ),
               ),
