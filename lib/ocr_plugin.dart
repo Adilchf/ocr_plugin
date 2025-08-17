@@ -8,8 +8,12 @@ import 'ocr_plugin_platform_interface.dart';
 /// Data holder for OCR extraction
 class OcrResult {
   final String? nin;
+  final String? nif;
   final String? cardNumber;
+  final String? cardNumberPassport;
   final String? familyName;
+  final String? societyName;
+  final String? familyNamePassport;
   final String? givenName;
   final String? birthdate;
   final String? expiryDate;
@@ -17,8 +21,12 @@ class OcrResult {
 
   OcrResult({
     this.nin,
+    this.nif,
     this.cardNumber,
+    this.cardNumberPassport,
     this.familyName,
+    this.societyName,
+    this.familyNamePassport,
     this.givenName,
     this.birthdate,
     this.expiryDate,
@@ -27,8 +35,12 @@ class OcrResult {
 
   Map<String, dynamic> toJson() => {
     'nin': nin,
+    'nif': nif,
     'cardNumber': cardNumber,
+    'cardNumberPassport': cardNumberPassport,
     'familyName': familyName,
+    'societyName': societyName,
+    'familyNamePassport': familyNamePassport,
     'givenName': givenName,
     'birthdate': birthdate,
     'expiryDate': expiryDate,
@@ -37,8 +49,12 @@ class OcrResult {
 
   factory OcrResult.fromJson(Map<String, dynamic> json) => OcrResult(
     nin: json['nin'],
+    nif: json['nif'],
     cardNumber: json['cardNumber'],
+    cardNumberPassport: json['cardNumberPassport'],
     familyName: json['familyName'],
+    societyName: json['societyName'],
+    familyNamePassport: json['familyNamePassport'],
     givenName: json['givenName'],
     birthdate: json['birthdate'],
     expiryDate: json['expiryDate'],
@@ -79,12 +95,15 @@ class OcrPlugin {
     final rawText = recognizedText.text;
 
     // Regex patterns for card data
-
+    final nif = OcrParser.extractNIF(rawText);
     final familyName = OcrParser.extractFamilyName(rawText);
+    final familyNamePassport = OcrParser.extractFamilyNamePassport(rawText);
+    final cardNumberPassport = OcrParser.extractCardNumberPassport(rawText);
+    final societyName = OcrParser.extractRaisonSociale(rawText);
     final givenName = OcrParser.extractGivenName(rawText);
     final birthdate = OcrParser.extractBirthdate(rawText);
     final expiryDate = OcrParser.extractEndDate(rawText);
-    final RhFactor = OcrParser.extractRhFactor(rawText);
+    final rhfactor = OcrParser.extractRhFactor(rawText);
 
     for (final block in recognizedText.blocks) {
       for (final line in block.lines) {
@@ -102,7 +121,7 @@ class OcrPlugin {
         }
 
         // --- Card Number: 9 alphanumeric, must have letters + digits ---
-        final cardRegex = RegExp(r'(?:\d{9}|[A-Z0-9]{9,}(?=.*\d))');
+        final cardRegex = RegExp(r'(?:\d{9}|[A-Z][0-9]{8})');
 
         if (cardNumber == null && cardRegex.hasMatch(text)) {
           cardNumber = cardRegex.firstMatch(text)!.group(0);
@@ -112,12 +131,16 @@ class OcrPlugin {
 
     return OcrResult(
       nin: nin,
+      nif: nif,
       cardNumber: cardNumber,
+      cardNumberPassport: cardNumberPassport,
       familyName: familyName,
+      societyName: societyName,
+      familyNamePassport: familyNamePassport,
       givenName: givenName,
       birthdate: birthdate,
       expiryDate: expiryDate,
-      rhfactor: RhFactor,
+      rhfactor: rhfactor,
     );
   }
 }
@@ -160,6 +183,28 @@ class OcrParser {
     return parts[0].replaceAll(RegExp(r'[^A-Z]'), '');
   }
 
+  static String extractFamilyNamePassport(String text) {
+    final line = _findMrzNameLine(text);
+    if (line == null) return '';
+
+    final lowerLine = line.toLowerCase();
+    final startIndex = lowerLine.indexOf('p<dza');
+    if (startIndex != -1) {
+      final fromIndex = startIndex + 5; // skip "p<dza"
+      final endIndex = lowerLine.indexOf('<<', fromIndex);
+      if (endIndex != -1 && endIndex > fromIndex) {
+        final rawName = line.substring(fromIndex, endIndex);
+        // Remove any non-letter characters
+        final cleaned = rawName.replaceAll(RegExp(r'[^A-Za-z]'), '');
+        if (cleaned.isNotEmpty) {
+          return cleaned.toUpperCase();
+        }
+      }
+    }
+
+    return '';
+  }
+
   // --- UPDATED: extracts only letters from the given name(s) ---
   static String extractGivenName(String text) {
     final line = _findMrzNameLine(text);
@@ -186,6 +231,88 @@ class OcrParser {
     return null;
   }
 
+  static String _afterLabelOnLine(String text, String label) {
+    final upper = text.toUpperCase();
+    final labelUpper = label.toUpperCase();
+    final i = upper.indexOf(labelUpper);
+    if (i == -1) return '';
+
+    // Slice after the label using the ORIGINAL text (to keep real chars)
+    final start = i + labelUpper.length;
+    var after = text.substring(start);
+
+    // Trim leading separators like colon, dash, spaces
+    after = after.replaceFirst(RegExp(r'^\s*[:：\-]?\s*'), '');
+
+    // Keep only until the end of the current line
+    final lineEnd = after.indexOf(RegExp(r'[\r\n]'));
+    final line = (lineEnd == -1) ? after : after.substring(0, lineEnd);
+
+    return line.trim();
+  }
+
+  /// Extract NIF (digits right after the "NIF" label)
+  static String extractNIF(String text) {
+    final normalized = text.toUpperCase();
+    final start = normalized.indexOf("NIF");
+    if (start == -1) return "";
+
+    final after = normalized.substring(start + 3); // skip "NIF"
+    final match = RegExp(r'(\d{10,20})').firstMatch(after);
+    return match?.group(1) ?? "";
+  }
+
+  /// Extract Raison Sociale (after "RAISON SOCIALE")
+  static String extractRaisonSociale(String text) {
+    // Work line-by-line to avoid over-matching across lines
+    final lines = text.split(RegExp(r'\r?\n'));
+    final upper = lines.map((l) => l.toUpperCase().trim()).toList();
+
+    // 2) Fallback: line starting with a legal form
+    final legalStart = RegExp(
+      r'^(SARL|SPA|EURL|SNC|SCS|SCA|SAS|ETS|ETB)\b(.+)?$',
+    );
+    for (final line in upper) {
+      final m = legalStart.firstMatch(line);
+      if (m != null) {
+        return _cleanupCompany(line);
+      }
+    }
+
+    return "";
+  }
+
+  /// Cleans common noise, trims trailing labels, and keeps useful chars.
+  /// Includes accented capitals common in FR (Ç, É, È, Â, Ê, Î, Ô, Û, Ä, Ë, Ï, Ö, Ü, Ÿ),
+  /// and ligatures (Æ, Œ).
+  static String _cleanupCompany(String s) {
+    // Stop at next label if present (RC, NIF, NIS, IF, etc.)
+    s = s.split(RegExp(r'\b(NIF|N°\s*RC|RC|NIS|IF|ID\s*FISCAL|AI)\b')).first;
+
+    // Normalize spaces
+    s = s.replaceAll(RegExp(r'\s{2,}'), ' ').trim();
+
+    // Keep letters (incl. accents), digits, and common punctuation in names
+    s = s.replaceAll(RegExp(r"[^A-Z0-9ÀÂÄÇÉÈÊËÎÏÔÖÙÛÜŸÆŒ&\-\.' ]"), '');
+
+    // Collapse inner multiple spaces again if cleaning introduced doubles
+    s = s.replaceAll(RegExp(r'\s{2,}'), ' ').trim();
+
+    return s;
+  }
+
+  static String extractCardNumberPassport(String text) {
+    // Remove spaces before processing
+    final normalized = text.replaceAll(' ', '');
+
+    final regex = RegExp(r'(\d{9})(?=\dDZA)');
+    final match = regex.firstMatch(normalized);
+    if (match != null) {
+      return match.group(1) ?? '';
+    }
+    return '';
+  }
+
   static String? extractRhFactor(String text) {
     final validGroups = ["O+", "O-", "A+", "A-", "AB+", "AB-"];
 
@@ -210,11 +337,14 @@ class OcrParser {
     return null;
   }
 
-  static String _formatDate(String digits) {
-    // Assuming YYMMDD format
-    final year = digits.substring(0, 2);
-    final month = digits.substring(2, 4);
-    final day = digits.substring(4, 6);
-    return '$day/$month/$year';
+  static String _formatDate(String yyMMdd) {
+    int year = int.parse(yyMMdd.substring(0, 2));
+    String month = yyMMdd.substring(2, 4);
+    String day = yyMMdd.substring(4, 6);
+
+    // Handle 20th & 21st century correction
+    int fullYear = (year > 50) ? (1900 + year) : (2000 + year);
+
+    return '$day.$month.$fullYear';
   }
 }
