@@ -23,18 +23,18 @@ class _IdCardPageState extends State<IdCardPage> {
 
     try {
       final file = File(pickedFile.path);
-      // 👇 enable face detection + cropping so facePath gets filled
-      final result = await OcrPlugin.extractData(file, detectAndCropFace: true);
+
+      // Plan A: try with face detection first
+      OcrResult res;
+      try {
+        res = await OcrPlugin.extractData(file, detectAndCropFace: true);
+      } catch (_) {
+        // If face path fails / no face: retry without face detection
+        res = await OcrPlugin.extractData(file, detectAndCropFace: false);
+      }
 
       if (!mounted) return;
-      setState(() {
-        _result = result;
-      });
-    } catch (e) {
-      if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text('Extraction failed: $e')));
+      setState(() => _result = res);
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -43,8 +43,7 @@ class _IdCardPageState extends State<IdCardPage> {
   @override
   Widget build(BuildContext context) {
     final hasResult = _result != null && !_loading;
-    final hasFace =
-        hasResult && _result!.facePath != null && _result!.facePath!.isNotEmpty;
+    final hasFace = hasResult && (_result!.facePath ?? '').isNotEmpty;
 
     return Scaffold(
       appBar: AppBar(title: const Text("Card OCR")),
@@ -78,49 +77,27 @@ class _IdCardPageState extends State<IdCardPage> {
                     _kv('Raison Sociale', _result!.societyName),
                     _kv('Passport Card Number', _result!.cardNumberPassport),
                     _kv('Passport Family Name', _result!.familyNamePassport),
-                    if (_result!.faceOk != null)
-                      _kv('Face OK', _result!.faceOk! ? 'Yes' : 'No'),
-                    if (_result!.faceError != null &&
-                        _result!.faceError!.isNotEmpty)
-                      _kv('Face Error', _result!.faceError),
 
-                    const SizedBox(height: 16),
-                    const Divider(height: 1),
-                    const SizedBox(height: 16),
-
-                    // --- Cropped face photo printed BELOW the data ---
-                    Text(
-                      'Extracted Photo',
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    const SizedBox(height: 12),
-
-                    AspectRatio(
-                      aspectRatio: 1, // square box
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: Colors.grey.shade200,
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                        clipBehavior: Clip.antiAlias,
-                        child: hasFace
-                            ? Image.file(
-                                File(_result!.facePath!),
-                                fit: BoxFit.cover,
-                                errorBuilder: (ctx, err, stack) =>
-                                    const _PhotoPlaceholder(),
-                              )
-                            : const _PhotoPlaceholder(),
-                      ),
-                    ),
-
+                    // --- Only show photo if a face was detected ---
                     if (hasFace) ...[
-                      const SizedBox(height: 8),
+                      const SizedBox(height: 16),
+                      const Divider(height: 1),
+                      const SizedBox(height: 16),
                       Text(
-                        _result!.facePath!,
-                        style: Theme.of(context).textTheme.bodySmall,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
+                        'Extracted Photo',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 12),
+                      AspectRatio(
+                        aspectRatio: 1,
+                        child: ClipRRect(
+                          borderRadius: BorderRadius.circular(16),
+                          child: Image.file(
+                            File(_result!.facePath!),
+                            height: 30,
+                            width: 30,
+                          ),
+                        ),
                       ),
                     ],
                   ],
@@ -133,7 +110,7 @@ class _IdCardPageState extends State<IdCardPage> {
   }
 
   Widget _kv(String label, String? value) {
-    if (value == null || value.isEmpty) return const SizedBox.shrink();
+    if ((value ?? '').isEmpty) return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.only(bottom: 8.0),
       child: Row(
@@ -147,20 +124,9 @@ class _IdCardPageState extends State<IdCardPage> {
             ),
           ),
           const SizedBox(width: 8),
-          Expanded(child: Text(value)),
+          Expanded(child: Text(value!)),
         ],
       ),
-    );
-  }
-}
-
-class _PhotoPlaceholder extends StatelessWidget {
-  const _PhotoPlaceholder();
-
-  @override
-  Widget build(BuildContext context) {
-    return const Center(
-      child: Icon(Icons.person_off, size: 64, color: Colors.black38),
     );
   }
 }
