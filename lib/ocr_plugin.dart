@@ -1,8 +1,11 @@
 library ocr_plugin;
 
 import 'dart:io';
+import 'dart:math' as math;
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
-
+import 'dart:typed_data';
+import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+import 'package:image/image.dart' as img;
 import 'ocr_plugin_platform_interface.dart';
 
 /// Data holder for OCR extraction
@@ -19,6 +22,11 @@ class OcrResult {
   final String? expiryDate;
   final String? rhfactor;
 
+  // 👇 New fields
+  final bool? faceOk; // true if face passed checks
+  final String? faceError; // reason if failed (e.g. "Closed eyes")
+  final String? facePath; // saved cropped face path (if any)
+
   OcrResult({
     this.nin,
     this.nif,
@@ -31,6 +39,9 @@ class OcrResult {
     this.birthdate,
     this.expiryDate,
     this.rhfactor,
+    this.faceOk,
+    this.faceError,
+    this.facePath,
   });
 
   Map<String, dynamic> toJson() => {
@@ -45,6 +56,9 @@ class OcrResult {
     'birthdate': birthdate,
     'expiryDate': expiryDate,
     'RhFactor': rhfactor,
+    'faceOk': faceOk,
+    'faceError': faceError,
+    'facePath': facePath,
   };
 
   factory OcrResult.fromJson(Map<String, dynamic> json) => OcrResult(
@@ -59,6 +73,9 @@ class OcrResult {
     birthdate: json['birthdate'],
     expiryDate: json['expiryDate'],
     rhfactor: json['RhFactor'],
+    faceOk: json['faceOk'],
+    faceError: json['faceError'],
+    facePath: json['facePath'],
   );
 }
 
@@ -70,7 +87,213 @@ class OcrPlugin {
   }
 
   /// Run OCR on an image file
-  static Future<OcrResult> extractData(File imageFile) async {
+  static const double _eyesClosedThresh = 0.3; // < 0.3 considered closed
+  static const double _maxYaw = 10.0; // degrees (Y)
+  static const double _maxRoll = 10.0; // degrees (Z)
+
+  // Detect a single face and run simple quality checks.
+  static Future<({Face? face, String? error, File? usedFile})> _detectFace(
+    File imageFile,
+  ) async {
+    Future<List<Face>> _runDetection(File f, {double minFace = 0.05}) async {
+      final inputImage = InputImage.fromFilePath(
+        f.path,
+      ); // ML Kit handles EXIF orientation
+      final detector = FaceDetector(
+        options: FaceDetectorOptions(
+          performanceMode: FaceDetectorMode.accurate,
+          enableClassification: true,
+          enableContours: false,
+          minFaceSize: minFace, // smaller -> can detect tiny faces
+        ),
+      );
+      try {
+        return await detector.processImage(inputImage);
+      } finally {
+        await detector.close();
+      }
+    }
+
+    // Pass A: original file, multiple minFace
+    for (final mf in [0.05, 0.035, 0.025]) {
+      final faces = await _runDetection(imageFile, minFace: mf);
+      if (faces.isNotEmpty) {
+        return (face: faces.first, error: null, usedFile: imageFile);
+      }
+    }
+
+    // Pass B: upscale once and retry (helps when the card shot is small)
+    final upscaled = await _upscaleCopy(imageFile, maxSide: 2200);
+    final fileB = upscaled ?? imageFile;
+    for (final mf in [0.035, 0.025, 0.015]) {
+      final faces = await _runDetection(fileB, minFace: mf);
+      if (faces.isNotEmpty) {
+        return (face: faces.first, error: null, usedFile: fileB);
+      }
+    }
+
+    // Pass C: scan ROIs (left/right/center thirds), using the larger image if available
+    final roiFiles = await _roiCrops(fileB);
+    for (final roi in roiFiles) {
+      for (final mf in [0.03, 0.02, 0.01]) {
+        final faces = await _runDetection(roi, minFace: mf);
+        if (faces.isNotEmpty) {
+          // NOTE: return the ROI file so _cropFace crops in the same coordinate space
+          return (face: faces.first, error: null, usedFile: roi);
+        }
+      }
+    }
+
+    return (face: null, error: 'No face detected', usedFile: null);
+  }
+
+  // One-time upscale to help tiny portraits (keeps aspect ratio)
+  static Future<File?> _upscaleCopy(
+    File imageFile, {
+    int maxSide = 2200,
+  }) async {
+    final bytes = await imageFile.readAsBytes();
+    final decoded0 = img.decodeImage(bytes);
+    if (decoded0 == null) return null;
+
+    final upright = img.bakeOrientation(
+      decoded0,
+    ); // ensure upright before resampling
+    final w = upright.width, h = upright.height;
+    final biggest = math.max(w, h);
+    if (biggest >= maxSide) return null; // already large enough
+
+    final scale = maxSide / biggest;
+    final resized = img.copyResize(
+      upright,
+      width: (w * scale).round(),
+      height: (h * scale).round(),
+    );
+
+    final outPath = _withSuffix(imageFile.path, '_up', fallbackExt: '.jpg');
+    await File(outPath).writeAsBytes(img.encodeJpg(resized, quality: 95));
+    return File(outPath);
+  }
+
+  // Heuristic ROIs: left / right / center thirds (full height) – common ID portrait areas
+  static Future<List<File>> _roiCrops(File imageFile) async {
+    final bytes = await imageFile.readAsBytes();
+    final decoded0 = img.decodeImage(bytes);
+    if (decoded0 == null) return [];
+
+    final upright = img.bakeOrientation(decoded0);
+    final W = upright.width, H = upright.height;
+
+    File saveCrop(int x, int y, int w, int h, String suffix) {
+      x = x.clamp(0, W - 1);
+      y = y.clamp(0, H - 1);
+      w = w.clamp(1, W - x);
+      h = h.clamp(1, H - y);
+      final crop = img.copyCrop(upright, x: x, y: y, width: w, height: h);
+      // to keep detector quality, keep a reasonable size (e.g., short side ~800)
+      final targetShort = 900;
+      final short = math.min(w, h);
+      final scale = short >= targetShort ? 1.0 : targetShort / short;
+      final resized = scale == 1.0
+          ? crop
+          : img.copyResize(
+              crop,
+              width: (w * scale).round(),
+              height: (h * scale).round(),
+            );
+
+      final outPath = _withSuffix(imageFile.path, suffix, fallbackExt: '.jpg');
+      File(outPath).writeAsBytesSync(img.encodeJpg(resized, quality: 95));
+      return File(outPath);
+    }
+
+    final thirdW = (W / 3).round();
+    final pad = (W * 0.04).round(); // a little horizontal padding
+
+    final left = saveCrop(0, 0, thirdW + pad, H, '_roiL');
+    final right = saveCrop(W - (thirdW + pad), 0, thirdW + pad, H, '_roiR');
+    final center = saveCrop(
+      (W - thirdW) ~/ 2 - pad ~/ 2,
+      0,
+      thirdW + pad,
+      H,
+      '_roiC',
+    );
+
+    return [left, right, center];
+  }
+
+  // Crop around the face with padding and save a 300x300 image.
+  static Future<String?> _cropFace(File imageFile, Face face) async {
+    final bytes = await imageFile.readAsBytes();
+    final original = img.decodeImage(bytes);
+    if (original == null) return null;
+
+    final rect = face.boundingBox;
+    const paddingFactor = 0.4; // 40% around face
+
+    int newX = (rect.left - rect.width * paddingFactor).toInt().clamp(
+      0,
+      original.width,
+    );
+    int newY = (rect.top - rect.height * paddingFactor).toInt().clamp(
+      0,
+      original.height,
+    );
+    int newW = (rect.width * (1 + 2 * paddingFactor)).toInt();
+    int newH = (rect.height * (1 + 2 * paddingFactor)).toInt();
+
+    // Clamp width/height to image bounds
+    newW = newW.clamp(0, original.width - newX);
+    newH = newH.clamp(0, original.height - newY);
+
+    final cropped = img.copyCrop(
+      original,
+      x: newX,
+      y: newY,
+      width: newW,
+      height: newH,
+    );
+    final resized = img.copyResize(cropped, width: 300, height: 300);
+
+    final path = _withSuffix(imageFile.path, '_cropped', fallbackExt: '.jpg');
+    final outBytes = img.encodeJpg(resized, quality: 92);
+    await File(path).writeAsBytes(outBytes);
+    return path;
+  }
+
+  static String _withSuffix(
+    String path,
+    String suffix, {
+    String fallbackExt = '.jpg',
+  }) {
+    final i = path.lastIndexOf('.');
+    if (i <= 0) return path + suffix + fallbackExt;
+    final base = path.substring(0, i);
+    final ext = path.substring(i);
+    return base + suffix + ext;
+  }
+
+  /// Run OCR on an image file (OPTIONAL: detect & crop face).
+  static Future<OcrResult> extractData(
+    File imageFile, {
+    bool detectAndCropFace = false,
+  }) async {
+    // --- Face detection (optional) ---
+    bool? faceOk;
+    String? faceError;
+    String? facePath;
+
+    if (detectAndCropFace) {
+      final r = await _detectFace(imageFile);
+      if (r.error != null) {
+        faceOk = false;
+        faceError = r.error;
+      } else {
+        faceOk = true;
+        facePath = await _cropFace(imageFile, r.face!);
+      }
+    }
     final inputImage = InputImage.fromFile(imageFile);
     final textRecognizer = TextRecognizer(script: TextRecognitionScript.latin);
     final recognizedText = await textRecognizer.processImage(inputImage);
@@ -133,6 +356,9 @@ class OcrPlugin {
       birthdate: birthdate,
       expiryDate: expiryDate,
       rhfactor: rhfactor,
+      faceOk: faceOk,
+      faceError: faceError,
+      facePath: facePath,
     );
   }
 }

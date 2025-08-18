@@ -33,6 +33,10 @@ class _AttestationfiscaleState extends State<Attestationfiscale> {
 
   @override
   Widget build(BuildContext context) {
+    final hasResult = _result != null && !_loading;
+    final hasFace =
+        hasResult && _result!.facePath != null && _result!.facePath!.isNotEmpty;
+
     return Scaffold(
       appBar: AppBar(title: const Text("Card OCR")),
       body: Padding(
@@ -46,19 +50,48 @@ class _AttestationfiscaleState extends State<Attestationfiscale> {
               onPressed: _pickAndExtract,
             ),
             const SizedBox(height: 20),
+
             if (_loading) const Center(child: CircularProgressIndicator()),
-            if (_result != null && !_loading)
+
+            if (hasResult)
               Expanded(
                 child: ListView(
                   children: [
-                    Text("NIF: ${_result!.nif ?? '-'}"),
+                    // --- Extracted data ---
+                    _kv('NIF', _result!.nif),
+                    _kv('Raison Sociale', _result!.societyName),
 
-                    Text("Society Name: ${_result!.societyName ?? '-'}"),
+                    const SizedBox(height: 16),
+                    const Divider(height: 1),
+                    const SizedBox(height: 16),
+
+                    // --- Cropped face photo printed BELOW the data ---
                   ],
                 ),
               ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _kv(String label, String? value) {
+    if (value == null || value.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8.0),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 150,
+            child: Text(
+              label,
+              style: const TextStyle(fontWeight: FontWeight.w600),
+            ),
+          ),
+          const SizedBox(width: 8),
+          Expanded(child: Text(value)),
+        ],
       ),
     );
   }
