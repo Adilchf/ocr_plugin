@@ -91,11 +91,12 @@ class OcrPlugin {
     print("============================================");
     await textRecognizer.close();
 
-    String? nin, cardNumber;
     final rawText = recognizedText.text;
 
     // Regex patterns for card data
     final nif = OcrParser.extractNIF(rawText);
+    final nin = OcrParser.extractNIN(rawText);
+    final cardNumber = OcrParser.extractCardNumber(rawText);
     final familyName = OcrParser.extractFamilyName(rawText);
     final familyNamePassport = OcrParser.extractFamilyNamePassport(rawText);
     final cardNumberPassport = OcrParser.extractCardNumberPassport(rawText);
@@ -115,17 +116,8 @@ class OcrPlugin {
             .replaceAll('l', '1'); // OCR lowercase L → 1
 
         // --- NIN: 18 consecutive digits ---
-        final ninRegex = RegExp(r'\d{18}');
-        if (nin == null && ninRegex.hasMatch(text)) {
-          nin = ninRegex.firstMatch(text)!.group(0);
-        }
 
         // --- Card Number: 9 alphanumeric, must have letters + digits ---
-        final cardRegex = RegExp(r'(?:\d{9}|[A-Z][0-9]{8})');
-
-        if (cardNumber == null && cardRegex.hasMatch(text)) {
-          cardNumber = cardRegex.firstMatch(text)!.group(0);
-        }
       }
     }
 
@@ -210,12 +202,19 @@ class OcrParser {
     final line = _findMrzNameLine(text);
     if (line == null) return '';
 
-    final parts = line.split('<<');
-    if (parts.length < 2) return '';
+    final upper = line.toUpperCase();
+    final start = upper.indexOf('<<');
+    if (start == -1) return '';
 
-    // After the first '<<' is GIVENNAME possibly with extra '<' padding.
-    // Remove all non-letters to return just letters (no spaces).
-    return parts[1].replaceAll(RegExp(r'[^A-Z]'), '');
+    final from = start + 2;
+    if (from >= upper.length) return '';
+
+    final end = upper.indexOf('<', from);
+    if (end == -1 || end <= from) return '';
+
+    final given = upper.substring(from, end);
+    // Keep only A–Z (drop any stray chars/spaces)
+    return given.replaceAll(RegExp(r'[^A-Z]'), '');
   }
 
   static String? extractBirthdate(String text) {
@@ -249,6 +248,12 @@ class OcrParser {
     final line = (lineEnd == -1) ? after : after.substring(0, lineEnd);
 
     return line.trim();
+  }
+
+  static String extractNIN(String text) {
+    final normalized = text.replaceAll(RegExp(r'[ \t\-]'), '');
+    final match = RegExp(r'\d{18}').firstMatch(normalized);
+    return match?.group(0) ?? '';
   }
 
   /// Extract NIF (digits right after the "NIF" label)
@@ -310,6 +315,29 @@ class OcrParser {
     if (match != null) {
       return match.group(1) ?? '';
     }
+    return '';
+  }
+
+  static String extractCardNumber(String text) {
+    if (text.isEmpty) return '';
+
+    // Normalize: drop all non-alphanumerics so spacing/colons/dashes don't matter
+    final normalized = text.replaceAll(RegExp(r'[^A-Za-z0-9]'), '');
+
+    // 1) Prefer a match immediately after "IDDZA"
+    final afterPrefix = RegExp(
+      r'DZA([A-Za-z]\d{8}|\d{9})',
+    ).firstMatch(normalized);
+    if (afterPrefix != null) {
+      return (afterPrefix.group(1) ?? '').toUpperCase();
+    }
+
+    // 2) Otherwise, find the first occurrence anywhere
+    final anyMatch = RegExp(r'([A-Za-z]\d{8}|\d{9})').firstMatch(normalized);
+    if (anyMatch != null) {
+      return (anyMatch.group(1) ?? '').toUpperCase();
+    }
+
     return '';
   }
 
