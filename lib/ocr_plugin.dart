@@ -1,9 +1,8 @@
-library ocr_plugin;
+library;
 
 import 'dart:io';
 import 'dart:math' as math;
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
-import 'dart:typed_data';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:image/image.dart' as img;
 import 'ocr_plugin_platform_interface.dart';
@@ -21,6 +20,10 @@ class OcrResult {
   final String? birthdate;
   final String? expiryDate;
   final String? rhfactor;
+  final String? bp;
+  final String? articleNumber;
+  final String? rcn;
+  final String? rcnarab;
 
   // 👇 New fields
   final bool? faceOk; // true if face passed checks
@@ -39,6 +42,10 @@ class OcrResult {
     this.birthdate,
     this.expiryDate,
     this.rhfactor,
+    this.bp,
+    this.articleNumber,
+    this.rcn,
+    this.rcnarab,
     this.faceOk,
     this.faceError,
     this.facePath,
@@ -56,6 +63,10 @@ class OcrResult {
     'birthdate': birthdate,
     'expiryDate': expiryDate,
     'RhFactor': rhfactor,
+    'bp': bp,
+    'articleNumber': articleNumber,
+    'rcn': rcn,
+    'rcnarab': rcnarab,
     'faceOk': faceOk,
     'faceError': faceError,
     'facePath': facePath,
@@ -73,6 +84,10 @@ class OcrResult {
     birthdate: json['birthdate'],
     expiryDate: json['expiryDate'],
     rhfactor: json['RhFactor'],
+    bp: json['bp'],
+    rcn: json['rcn'],
+    rcnarab: json['rcnarab'],
+    articleNumber: json['articleNumber'],
     faceOk: json['faceOk'],
     faceError: json['faceError'],
     facePath: json['facePath'],
@@ -95,7 +110,7 @@ class OcrPlugin {
   static Future<({Face? face, String? error, File? usedFile})> _detectFace(
     File imageFile,
   ) async {
-    Future<List<Face>> _runDetection(File f, {double minFace = 0.05}) async {
+    Future<List<Face>> runDetection(File f, {double minFace = 0.05}) async {
       final inputImage = InputImage.fromFilePath(
         f.path,
       ); // ML Kit handles EXIF orientation
@@ -116,7 +131,7 @@ class OcrPlugin {
 
     // Pass A: original file, multiple minFace
     for (final mf in [0.05, 0.035, 0.025]) {
-      final faces = await _runDetection(imageFile, minFace: mf);
+      final faces = await runDetection(imageFile, minFace: mf);
       if (faces.isNotEmpty) {
         return (face: faces.first, error: null, usedFile: imageFile);
       }
@@ -126,7 +141,7 @@ class OcrPlugin {
     final upscaled = await _upscaleCopy(imageFile, maxSide: 2200);
     final fileB = upscaled ?? imageFile;
     for (final mf in [0.035, 0.025, 0.015]) {
-      final faces = await _runDetection(fileB, minFace: mf);
+      final faces = await runDetection(fileB, minFace: mf);
       if (faces.isNotEmpty) {
         return (face: faces.first, error: null, usedFile: fileB);
       }
@@ -136,7 +151,7 @@ class OcrPlugin {
     final roiFiles = await _roiCrops(fileB);
     for (final roi in roiFiles) {
       for (final mf in [0.03, 0.02, 0.01]) {
-        final faces = await _runDetection(roi, minFace: mf);
+        final faces = await runDetection(roi, minFace: mf);
         if (faces.isNotEmpty) {
           // NOTE: return the ROI file so _cropFace crops in the same coordinate space
           return (face: faces.first, error: null, usedFile: roi);
@@ -328,6 +343,10 @@ class OcrPlugin {
     final birthdate = OcrParser.extractBirthdate(rawText);
     final expiryDate = OcrParser.extractEndDate(rawText);
     final rhfactor = OcrParser.extractRhFactor(rawText);
+    final bp = OcrParser.extractBP(rawText);
+    final rcn = OcrParser.extractRCN(rawText);
+    final rcnarab = OcrParser.extractRCNArabic(rawText);
+    final articleNumber = OcrParser.extractArticleNumber(rawText);
 
     for (final block in recognizedText.blocks) {
       for (final line in block.lines) {
@@ -356,6 +375,10 @@ class OcrPlugin {
       birthdate: birthdate,
       expiryDate: expiryDate,
       rhfactor: rhfactor,
+      bp: bp,
+      rcn: rcn,
+      rcnarab: rcnarab,
+      articleNumber: articleNumber,
       faceOk: faceOk,
       faceError: faceError,
       facePath: facePath,
@@ -493,6 +516,75 @@ class OcrParser {
     return match?.group(1) ?? "";
   }
 
+  static String extractBP(String text) {
+    if (text.isEmpty) return '';
+
+    // Find "BP:" (case-insensitive), capture following digits (with optional spaces/dashes)
+    final m = RegExp(
+      r'BP\s*:\s*([0-9\s-]{10,})',
+      caseSensitive: false,
+    ).firstMatch(text);
+    if (m == null) return '';
+
+    // Keep digits only, then take the first 10
+    final digits = (m.group(1) ?? '').replaceAll(RegExp(r'\D'), '');
+    return digits.length >= 10 ? digits.substring(0, 10) : '';
+  }
+
+  // Extract exactly 11 digits that come after the label "Article" (case-insensitive).
+  // Tolerates spaces/dashes/linebreaks between digits, then returns the first 11 digits found.
+  static String extractArticleNumber(String text) {
+    if (text.isEmpty) return '';
+
+    // Normalize NBSP -> space
+    final norm = text.replaceAll('\u00A0', ' ');
+
+    // Match "ARTICLE" or "ARTICTE", optional colon, then collect digits (with spaces/dashes)
+    final re = RegExp(
+      r'ARTIC(?:LE|TE)\s*[:：]?\s*([0-9\s-]{11,})',
+      caseSensitive: false,
+    );
+    final m = re.firstMatch(norm);
+    if (m != null) {
+      final digits = (m.group(1) ?? '').replaceAll(RegExp(r'\D'), '');
+      return digits.length >= 11 ? digits.substring(0, 11) : '';
+    }
+
+    // Fallback: first 11 digits in a row anywhere (tolerate spaces/dashes)
+    final any = RegExp(r'(?:\d[\s-]*){11}').firstMatch(norm);
+    if (any != null) {
+      final digits = any.group(0)!.replaceAll(RegExp(r'\D'), '');
+      return digits.substring(0, 11);
+    }
+
+    return '';
+  }
+
+  // Returns the value after N./N°/№/No (letters+digits with - / . allowed)
+  // Extract value only when the line contains the full prefix:
+  // "Registre de conmerce/agrément N." (case-insensitive).
+  // Also tolerates "commerce" vs "conmerce" and é/e in "agrément".
+  static String extractRCN(String text) {
+    if (text.isEmpty) return '';
+
+    // Normalize odd spaces and collapse
+    final norm = text
+        .replaceAll('\u00A0', ' ') // NBSP
+        .replaceAll('\u202F', ' ') // narrow NBSP
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+
+    final re = RegExp(
+      r'REGISTRE\s+DE\s+CO(?:MM|NM)ERCE\/AGR[ÉE]MENT\s*N\.\s*' // full prefix up to "N."
+      r'([A-Za-z0-9][A-Za-z0-9\-\/\.–—-]*)', // token after N.
+      caseSensitive: false,
+      unicode: true,
+    );
+
+    final m = re.firstMatch(norm);
+    return m?.group(1) ?? '';
+  }
+
   /// Extract Raison Sociale (after "RAISON SOCIALE")
   static String extractRaisonSociale(String text) {
     // Work line-by-line to avoid over-matching across lines
@@ -542,6 +634,16 @@ class OcrParser {
       return match.group(1) ?? '';
     }
     return '';
+  }
+
+  static String? extractRCNArabic(String text) {
+    final pattern = RegExp(r'\d{2}/\s*\d{2}\s*-\s*\d{7,}\s*\d{2}');
+    for (var line in text.split('\n')) {
+      if (pattern.hasMatch(line)) {
+        return line.trim(); // return the first match
+      }
+    }
+    return null; // nothing found
   }
 
   static String extractCardNumber(String text) {

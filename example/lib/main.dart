@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:ocr_plugin_example/AttestationFiscale.dart';
+import 'package:ocr_plugin_example/CertificatExistance.dart';
+import 'package:ocr_plugin_example/Certificatexistance.dart'
+    hide CertificatExistance;
 import 'package:ocr_plugin_example/IdCardPage.dart';
 import 'package:ocr_plugin_example/PassportPage.dart';
+import 'package:ocr_plugin_example/RegistreCommerce.dart';
 
 void main() {
   runApp(const MyApp());
@@ -57,6 +61,28 @@ class MainPage extends StatelessWidget {
                   context,
                   MaterialPageRoute(
                     builder: (context) => const Attestationfiscale(),
+                  ),
+                );
+              },
+            ),
+            ElevatedButton(
+              child: const Text("Certificat D'Existance"),
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const CertificatExistance(),
+                  ),
+                );
+              },
+            ),
+            ElevatedButton(
+              child: const Text("Registre Commerce"),
+              onPressed: () {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const Registrecommerce(),
                   ),
                 );
               },
