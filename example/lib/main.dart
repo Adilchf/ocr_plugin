@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:ocr_plugin/ocr_plugin.dart';
+import 'package:ocr_plugin_example/services/ocr_api.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -31,38 +32,40 @@ class DocumentPage extends StatefulWidget {
 
 class _DocumentPageState extends State<DocumentPage> {
   final picker = ImagePicker();
-  OcrResult? _result;
+  OcrResult? _localResult; // plugin result
+  Map<String, dynamic>? _serverResult; // server result
   bool _loading = false;
   String? _currentDoc;
 
   Future<void> _pickAndExtract({required String docType}) async {
     setState(() {
       _currentDoc = docType;
-      _result = null;
+      _localResult = null;
+      _serverResult = null;
     });
 
     final source = await showModalBottomSheet<ImageSource>(
       context: context,
-    shape: const RoundedRectangleBorder(
-      borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-    ),
-    builder: (ctx) => SafeArea(
-      child: Wrap(
-        children: [
-          ListTile(
-            leading: const Icon(Icons.camera_alt),
-            title: const Text("Camera"),
-            onTap: () => Navigator.pop(ctx, ImageSource.camera),
-          ),
-          ListTile(
-            leading: const Icon(Icons.photo_library),
-            title: const Text("Gallery"),
-            onTap: () => Navigator.pop(ctx, ImageSource.gallery),
-          ),
-        ],
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
       ),
-    ),
-  );
+      builder: (ctx) => SafeArea(
+        child: Wrap(
+          children: [
+            ListTile(
+              leading: const Icon(Icons.camera_alt),
+              title: const Text("Camera"),
+              onTap: () => Navigator.pop(ctx, ImageSource.camera),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library),
+              title: const Text("Gallery"),
+              onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+            ),
+          ],
+        ),
+      ),
+    );
 
     if (source == null) return;
     final pickedFile = await picker.pickImage(source: source);
@@ -72,9 +75,18 @@ class _DocumentPageState extends State<DocumentPage> {
 
     try {
       final file = File(pickedFile.path);
-      final res = await OcrPlugin.extractData(file);
+
+      // Local OCR
+      final localRes = await OcrPlugin.extractData(file);
+
+      // Server OCR
+      final serverRes = await ServerOcrService.extractFromServer(file, docType);
+
       if (!mounted) return;
-      setState(() => _result = res);
+      setState(() {
+        _localResult = localRes;
+        _serverResult = serverRes;
+      });
     } finally {
       if (mounted) setState(() => _loading = false);
     }
@@ -82,7 +94,8 @@ class _DocumentPageState extends State<DocumentPage> {
 
   @override
   Widget build(BuildContext context) {
-    final hasResult = _result != null && !_loading;
+    final hasAnyResult =
+        (_localResult != null || _serverResult != null) && !_loading;
 
     return Scaffold(
       appBar: AppBar(title: const Text("Select Document Type")),
@@ -111,12 +124,20 @@ class _DocumentPageState extends State<DocumentPage> {
               child: const Text("Registre Commerce"),
               onPressed: () => _pickAndExtract(docType: "Registre Commerce"),
             ),
+            ElevatedButton(
+  child: const Text("Birth Certificate"),
+  onPressed: () => _pickAndExtract(docType: "Birth Certificate"),
+),
+ElevatedButton(
+  child: const Text("Residence Certificate"),
+  onPressed: () => _pickAndExtract(docType: "Residence Certificate"),
+),
 
             const SizedBox(height: 20),
 
             if (_loading) const CircularProgressIndicator(),
 
-            if (hasResult)
+            if (hasAnyResult)
               Expanded(
                 child: ListView(
                   children: [
@@ -125,7 +146,23 @@ class _DocumentPageState extends State<DocumentPage> {
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
                     const Divider(height: 20),
-                    ..._buildDocFields(_currentDoc!, _result!),
+
+                    // Local OCR
+                    if (_localResult != null &&
+            _currentDoc != "Birth Certificate" &&
+            _currentDoc != "Residence Certificate") ...[
+                      Text("📌 Local OCR",
+                          style: Theme.of(context).textTheme.titleSmall),
+                      ..._buildDocFields(_currentDoc!, _localResult!),
+                      const SizedBox(height: 20),
+                    ],
+
+                    // Server OCR
+                    if (_serverResult != null) ...[
+                      Text("🌍 Server OCR",
+                          style: Theme.of(context).textTheme.titleSmall),
+                      ..._serverResult!.entries.map((e) => _kv(e.key, e.value)),
+                    ],
                   ],
                 ),
               ),
@@ -135,6 +172,7 @@ class _DocumentPageState extends State<DocumentPage> {
     );
   }
 
+  /// Local OCR specific fields
   List<Widget> _buildDocFields(String docType, OcrResult res) {
     switch (docType) {
       case "ID Card":
@@ -172,8 +210,10 @@ class _DocumentPageState extends State<DocumentPage> {
     }
   }
 
-  Widget _kv(String label, String? value) {
-    if ((value ?? '').isEmpty) return const SizedBox.shrink();
+  Widget _kv(String label, dynamic value) {
+    if (value == null || value.toString().isEmpty) {
+      return const SizedBox.shrink();
+    }
     return Padding(
       padding: const EdgeInsets.only(bottom: 6.0),
       child: Row(
@@ -186,7 +226,7 @@ class _DocumentPageState extends State<DocumentPage> {
               style: const TextStyle(fontWeight: FontWeight.bold),
             ),
           ),
-          Expanded(child: Text(value!)),
+          Expanded(child: Text(value.toString())),
         ],
       ),
     );
