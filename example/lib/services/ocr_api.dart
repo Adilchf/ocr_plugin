@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 
 class ServerOcrService {
-  static const String baseHost = "http://192.168.2.27:8000";
+  static const String baseHost = "http://105.96.12.227:8000";
 
   /// Map docType to API endpoint
   static String _endpointForDoc(String docType) {
