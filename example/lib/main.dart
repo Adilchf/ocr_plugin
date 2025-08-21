@@ -40,11 +40,22 @@ class _DocumentPageState extends State<DocumentPage> {
   bool _loading = false;
   String? _currentDoc;
 
+  // Track confirmed documents
+  final Set<String> _confirmedDocs = {};
+
+  // Required document list
+  final List<String> _requiredDocs = [
+    "ID Card Front",
+    "ID Card Back",
+    "Birth Certificate",
+    "Residence Certificate"
+  ];
+
   Future<void> _pickAndExtract({required String docType}) async {
     setState(() {
       _localResult = null;
       _serverResult = null;
-       _currentDoc = docType;
+      _currentDoc = docType;
     });
 
     // choose camera/gallery
@@ -131,47 +142,49 @@ class _DocumentPageState extends State<DocumentPage> {
                             style: const TextStyle(
                                 fontSize: 18, fontWeight: FontWeight.bold)),
                         const Divider(),
-                        if (_localResult != null) ...[
-                          const Text("Extracted Data ",
-                              style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.indigo)),
+                        if (_localResult != null)
                           ..._buildDocFields(docType, _localResult!),
-                          const SizedBox(height: 12),
-                        ],
                         if (_serverResult != null) ...[
-                          const Text("Extracted Data",
-                              style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  color: Colors.indigo)),
-                                  if (_currentDoc == "Residence Certificate") ...[
-    
-    _kv("Birth Place", _serverResult!["arabic"]?["birthPlace"]),
-    _kv("Address", _serverResult!["arabic"]?["address"]),
-    _kv("Commune", _serverResult!["arabic"]?["commune"]),
-  ] else if (_currentDoc == "Birth Certificate") ...[
-    
-    _kv("Father Full Name", _serverResult!["arabic"]?["fatherFullName"]),
-    _kv("Mother Full Name", _serverResult!["arabic"]?["motherFullName"]),
-    _kv("Birth Certificate Number", _serverResult!["arabic"]?["birthCertificateNumber"]),
-  ] else
-                          ..._serverResult!.entries.map((e) => _kv(e.key, e.value)),
+                          if (_currentDoc == "Residence Certificate") ...[
+                            _kv("Full Name", _serverResult!["arabic"]?["fullName"]),
+                            _kv("Birth Place", _serverResult!["arabic"]?["birthPlace"]),
+                            _kv("Address", _serverResult!["arabic"]?["address"]),
+                            _kv("Wilaya", _serverResult!["arabic"]?["wilaya"]),
+                          ] else if (_currentDoc == "Birth Certificate") ...[
+                            _kv("Father Full Name", _serverResult!["arabic"]?["fatherFullName"]),
+                            _kv("Mother Full Name", _serverResult!["arabic"]?["motherFullName"]),
+                            _kv("Birth Certificate Number",
+                                _serverResult!["arabic"]?["birthCertificateNumber"]),
+                          ],
                         ],
                         if (_localResult == null && _serverResult == null)
                           const Text("⚠️ No data extracted"),
                         const SizedBox(height: 16),
-                        Align(
-                          alignment: Alignment.centerRight,
-                          child: ElevatedButton(
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.indigo,
-                              shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(10)),
+
+                        // Buttons Row
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            TextButton(
+                              onPressed: () => Navigator.pop(context),
+                              child: const Text("Close"),
                             ),
-                            onPressed: () => Navigator.pop(context),
-                            child: const Text("Close",
-                                style: TextStyle(color: Colors.white)),
-                          ),
+                            const SizedBox(width: 12),
+                            ElevatedButton(
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.green,
+                              ),
+                              onPressed: () {
+                                setState(() {
+                                  if (_currentDoc != null) {
+                                    _confirmedDocs.add(_currentDoc!);
+                                  }
+                                });
+                                Navigator.pop(context);
+                              },
+                              child: const Text("Confirm"),
+                            ),
+                          ],
                         )
                       ],
                     ),
@@ -195,6 +208,9 @@ class _DocumentPageState extends State<DocumentPage> {
 
   @override
   Widget build(BuildContext context) {
+    final allConfirmed =
+        _requiredDocs.every((doc) => _confirmedDocs.contains(doc));
+
     return Scaffold(
       backgroundColor: Colors.grey[100],
       appBar: AppBar(
@@ -206,18 +222,49 @@ class _DocumentPageState extends State<DocumentPage> {
       ),
       body: Padding(
         padding: const EdgeInsets.all(16.0),
-        child: ListView(
+        child: Column(
           children: [
-            _docCard("ID Card (Front)", "ID Card", Icons.credit_card),
-            _docCard("ID Card (Back)", "ID Card", Icons.credit_card),
-            _docCard("Passport", "Passport", Icons.travel_explore),
+            Expanded(
+              child: ListView(
+                children: [
+                  _docCard("ID Card (Front)", "ID Card Front", Icons.credit_card),
+                  _docCard("ID Card (Back)", "ID Card Back", Icons.credit_card),
+                  _docCard("Birth Certificate", "Birth Certificate", Icons.child_care),
+                  _docCard("Residence Certificate", "Residence Certificate", Icons.home),
+                  if (_loading) ...[
+                    const SizedBox(height: 20),
+                    const Center(
+                        child: CircularProgressIndicator(color: Colors.indigo)),
+                  ]
+                ],
+              ),
+            ),
 
-            _docCard("Birth Certificate", "Birth Certificate", Icons.child_care),
-            _docCard("Residence Certificate", "Residence Certificate", Icons.home),
-            if (_loading) ...[
-              const SizedBox(height: 20),
-              const Center(child: CircularProgressIndicator(color: Colors.indigo)),
-            ]
+            // Continue button only when all are confirmed
+            if (allConfirmed)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 12.0),
+                child: ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.indigo,
+                    foregroundColor: Colors.white,
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 50, vertical: 14),
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12)),
+                  ),
+                  onPressed: () {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text("✅ All documents confirmed!")),
+                    );
+                    // Navigate to next page here
+                  },
+                  child: const Text(
+                    "Continue",
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                  ),
+                ),
+              )
           ],
         ),
       ),
@@ -226,9 +273,17 @@ class _DocumentPageState extends State<DocumentPage> {
 
   /// Card UI for each doc
   Widget _docCard(String label, String docType, IconData icon) {
+    final isConfirmed = _confirmedDocs.contains(docType);
+
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 8),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(16),
+        side: BorderSide(
+          color: isConfirmed ? Colors.green : Colors.transparent,
+          width: 2,
+        ),
+      ),
       elevation: 4,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -236,7 +291,7 @@ class _DocumentPageState extends State<DocumentPage> {
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             Row(children: [
-              Icon(icon, color: Colors.indigo),
+              Icon(icon, color: isConfirmed ? Colors.green : Colors.indigo),
               const SizedBox(width: 12),
               Text(label,
                   style: const TextStyle(
@@ -245,9 +300,9 @@ class _DocumentPageState extends State<DocumentPage> {
             ElevatedButton.icon(
               onPressed: () => _pickAndExtract(docType: docType),
               icon: const Icon(Icons.upload_file, size: 18),
-              label: const Text("Upload"),
+              label: Text(isConfirmed ? "Confirmed" : "Scan"),
               style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.indigo,
+                backgroundColor: isConfirmed ? Colors.green : Colors.indigo,
                 foregroundColor: Colors.white,
                 shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(12)),
@@ -262,7 +317,8 @@ class _DocumentPageState extends State<DocumentPage> {
   /// Local OCR fields
   List<Widget> _buildDocFields(String docType, OcrResult res) {
     switch (docType) {
-      case "ID Card":
+      case "ID Card Front":
+      case "ID Card Back":
         return [
           _kv("NIN", res.nin),
           _kv("Card Number", res.cardNumber),
@@ -272,26 +328,6 @@ class _DocumentPageState extends State<DocumentPage> {
           _kv("Expiry Date", res.expiryDate),
           _kv("Rh", res.rhfactor),
         ];
-      case "Passport":
-        return [
-          _kv("NIN", res.nin),
-          _kv("Passport Number", res.cardNumberPassport),
-          _kv("Family Name", res.familyNamePassport),
-          _kv("Given Name", res.givenName),
-          _kv("Birthdate", res.birthdate),
-          _kv("Expiry Date", res.expiryDate),
-          _kv("Authority", res.authority),
-        ];
-      case "Attestation Fiscale":
-        return [_kv("NIF", res.nif), _kv("Raison Sociale", res.societyName)];
-      case "Certificat d'Existence":
-        return [
-          _kv("BP", res.bp),
-          _kv("Article Number", res.articleNumber),
-          _kv("RCN", res.rcn),
-        ];
-      case "Registre Commerce":
-        return [_kv("RCN", res.rcnarab)];
       default:
         return [const Text("No specific fields configured")];
     }
@@ -307,8 +343,8 @@ class _DocumentPageState extends State<DocumentPage> {
           SizedBox(
             width: 140,
             child: Text(label,
-                style:
-                    const TextStyle(fontWeight: FontWeight.bold, color: Colors.black87)),
+                style: const TextStyle(
+                    fontWeight: FontWeight.bold, color: Colors.black87)),
           ),
           Expanded(child: Text(value.toString())),
         ],
