@@ -334,21 +334,41 @@ class _DocumentPageState extends State<DocumentPage> {
   }
 
   Widget _kv(String label, dynamic value) {
-    if (value == null || value.toString().isEmpty) return const SizedBox.shrink();
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 6.0),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          SizedBox(
-            width: 140,
-            child: Text(label,
-                style: const TextStyle(
-                    fontWeight: FontWeight.bold, color: Colors.black87)),
+  final displayValue = (value == null || value.toString().isEmpty)
+      ? "⚠️ Not found, please re-scan the document"
+      : value.toString();
+
+  return Padding(
+    padding: const EdgeInsets.only(bottom: 6.0),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SizedBox(
+          width: 140,
+          child: Text(
+            "$label:",
+            style: const TextStyle(
+              fontWeight: FontWeight.bold,
+              color: Colors.black87,
+            ),
           ),
-          Expanded(child: Text(value.toString())),
-        ],
-      ),
-    );
-  }
+        ),
+        Expanded(
+          child: Text(
+            displayValue,
+            style: TextStyle(
+              color: (value == null || value.toString().isEmpty)
+                  ? Colors.red
+                  : Colors.black87,
+              fontStyle: (value == null || value.toString().isEmpty)
+                  ? FontStyle.italic
+                  : FontStyle.normal,
+            ),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
 }
